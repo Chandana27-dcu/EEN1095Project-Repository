@@ -1,0 +1,7 @@
+## How to Run
+
+python -m test
+python -m baseline_test
+python -m train
+python -m evaluate_dqn
+python -m plot_results
