@@ -1,7 +1,92 @@
 ## How to Run
 
-python -m test
-python -m baseline_test
-python -m train
-python -m evaluate_dqn
-python -m plot_results
+# Commands
+
+## 1. Clone the Repository
+
+```bash
+git clone https://github.com/<your-username>/EEN1095Project-Repository.git
+cd EEN1095Project-Repository
+```
+
+---
+
+## 2. Install Required Packages
+
+```bash
+pip install torch numpy pandas matplotlib gymnasium stable-baselines3
+```
+
+---
+
+## 4. Train D3QN
+
+```bash
+python -m src.train_d3q
+```
+
+---
+
+## 5. Evaluate D3QN
+
+```bash
+python -m src.evaluate_d3q
+```
+
+---
+
+## 6. Train PPO
+
+```bash
+python -m src.train_ppo
+```
+
+---
+
+## 7. Evaluate PPO
+
+```bash
+python -m src.evaluate_ppo
+```
+
+---
+
+## 8. Generate Comparison Graphs
+
+```bash
+python -m src.plot_comparison_graphs
+```
+
+---
+
+## 9. Repository Structure
+
+```text
+src/        → Source code
+models/     → Trained D3QN and PPO models
+results/    → Evaluation results (CSV files)
+figures/    → Performance comparison graphs
+plots/      → Training plots
+archive/    → Previous implementation
+```
+
+---
+
+## Review Instructions
+
+The final implementation is located in the **`src/`** directory.
+
+To review the project:
+
+1. Review the source code in `src/`.
+2. Trained models are available in `models/`.
+3. Evaluation results are available in `results/`.
+4. Performance graphs are available in `figures/`.
+
+To reproduce the results:
+
+```bash
+python -m src.evaluate_d3q
+python -m src.evaluate_ppo
+python -m src.plot_comparison_graphs
+```
