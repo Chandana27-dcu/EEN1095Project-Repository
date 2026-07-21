@@ -1,5 +1,5 @@
 import numpy as np
-from src.config import CONFIG
+from config_d3q import CONFIG
 
 
 def compute_reward(metrics):

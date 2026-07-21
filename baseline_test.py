@@ -1,18 +1,45 @@
-from src.environment import SlicingEnv
+from src.environment_d3q import NetworkSlicingD3QEnv
 
-for action_index in range(5):
-    env = SlicingEnv()
-    env.reset()
-    total_reward = 0
 
-    for t in range(env.max_time):
-        state, reward, done, _ = env.step(action_index)
-        total_reward += reward
+NUM_ACTIONS_TO_TEST = 5
 
-    print("\nAction:", action_index)
-    print("Allocation:", env.actions[action_index])
-    print("Total Reward:", total_reward)
-    print("Final State:", state)
-    print("Throughput:", env.metrics["throughput"])
-    print("PLR:", env.metrics["plr"])
-    print("------------------------")
+
+def run_baseline(action_index: int) -> None:
+    env = NetworkSlicingD3QEnv()
+
+    observation, info = env.reset()
+
+    total_reward = 0.0
+    terminated = False
+    truncated = False
+
+    while not (terminated or truncated):
+        observation, reward, terminated, truncated, info = env.step(
+            action_index
+        )
+        total_reward += float(reward)
+
+    results = env.get_episode_metrics()
+
+    print("\n" + "=" * 70)
+    print(f"Baseline Action Index: {action_index}")
+    print(f"Total Reward: {total_reward:.4f}")
+    print("=" * 70)
+
+    for slice_name, metrics in results.items():
+        print(f"\nSlice: {slice_name}")
+
+        for metric_name, value in metrics.items():
+            if isinstance(value, float):
+                print(f"  {metric_name}: {value:.4f}")
+            else:
+                print(f"  {metric_name}: {value}")
+
+
+def main() -> None:
+    for action_index in range(NUM_ACTIONS_TO_TEST):
+        run_baseline(action_index)
+
+
+if __name__ == "__main__":
+    main()
