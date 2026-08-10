@@ -33,19 +33,13 @@ class DuelingQNetwork(nn.Module):
         super().__init__()
 
         if state_size is None:
-            state_size = int(
-                CONFIG["STATE_SIZE"]
-            )
+            state_size = int(CONFIG["STATE_SIZE"])
 
         if action_size is None:
-            action_size = int(
-                CONFIG["NUMBER_OF_ACTIONS"]
-            )
+            action_size = int(CONFIG["NUMBER_OF_ACTIONS"])
 
         if hidden_size is None:
-            hidden_size = int(
-                CONFIG["D3QN"]["hidden_size"]
-            )
+            hidden_size = int(CONFIG["HIDDEN_SIZE"])
 
         if state_size <= 0:
             raise ValueError(
@@ -66,10 +60,7 @@ class DuelingQNetwork(nn.Module):
         self.action_size = action_size
         self.hidden_size = hidden_size
 
-        # ====================================================
-        # SHARED FEATURE LAYERS
-        # ====================================================
-
+        # Shared feature-extraction layers.
         self.feature_layer = nn.Sequential(
             nn.Linear(
                 self.state_size,
@@ -84,12 +75,7 @@ class DuelingQNetwork(nn.Module):
             nn.ReLU(),
         )
 
-        # ====================================================
-        # VALUE STREAM
-        #
-        # Estimates V(s)
-        # ====================================================
-
+        # State-value stream: V(s)
         self.value_stream = nn.Sequential(
             nn.Linear(
                 self.hidden_size,
@@ -103,12 +89,7 @@ class DuelingQNetwork(nn.Module):
             ),
         )
 
-        # ====================================================
-        # ADVANTAGE STREAM
-        #
-        # Estimates A(s, a)
-        # ====================================================
-
+        # Action-advantage stream: A(s, a)
         self.advantage_stream = nn.Sequential(
             nn.Linear(
                 self.hidden_size,
@@ -124,38 +105,20 @@ class DuelingQNetwork(nn.Module):
 
         self._initialize_weights()
 
-    # ========================================================
-    # WEIGHT INITIALIZATION
-    # ========================================================
-
-    def _initialize_weights(
-        self,
-    ) -> None:
+    def _initialize_weights(self) -> None:
         """
-        Initialize linear layers using
-        Kaiming initialization.
+        Initialize linear layers using Kaiming initialization.
         """
 
         for module in self.modules():
-
-            if isinstance(
-                module,
-                nn.Linear,
-            ):
-
+            if isinstance(module, nn.Linear):
                 nn.init.kaiming_uniform_(
                     module.weight,
                     nonlinearity="relu",
                 )
 
                 if module.bias is not None:
-                    nn.init.zeros_(
-                        module.bias
-                    )
-
-    # ========================================================
-    # FORWARD PASS
-    # ========================================================
+                    nn.init.zeros_(module.bias)
 
     def forward(
         self,
@@ -164,43 +127,30 @@ class DuelingQNetwork(nn.Module):
         """
         Return Q-values for all allocation actions.
 
-        Input:
+        Input shape:
             [batch_size, state_size]
 
-        Output:
+        Output shape:
             [batch_size, action_size]
         """
 
         if state.ndim == 1:
             state = state.unsqueeze(0)
 
-        if (
-            state.shape[-1]
-            != self.state_size
-        ):
+        if state.shape[-1] != self.state_size:
             raise ValueError(
-                f"Expected state size "
-                f"{self.state_size}, "
-                f"but received "
-                f"{state.shape[-1]}."
+                f"Expected state size {self.state_size}, "
+                f"but received {state.shape[-1]}."
             )
 
-        features = (
-            self.feature_layer(
-                state
-            )
+        features = self.feature_layer(state)
+
+        state_value = self.value_stream(
+            features
         )
 
-        state_value = (
-            self.value_stream(
-                features
-            )
-        )
-
-        advantages = (
-            self.advantage_stream(
-                features
-            )
+        advantages = self.advantage_stream(
+            features
         )
 
         centered_advantages = (
@@ -219,37 +169,23 @@ class DuelingQNetwork(nn.Module):
         return q_values
 
 
-# ============================================================
-# NETWORK CREATION HELPER
-# ============================================================
-
 def create_network(
     device: torch.device | str | None = None,
 ) -> DuelingQNetwork:
     """
-    Create and optionally move the
-    network to a device.
+    Create and optionally move the network to a device.
     """
 
     network = DuelingQNetwork()
 
     if device is not None:
-        network = network.to(
-            device
-        )
+        network = network.to(device)
 
     return network
 
 
-# ============================================================
-# TEST
-# ============================================================
-
 if __name__ == "__main__":
-
-    network = (
-        DuelingQNetwork()
-    )
+    network = DuelingQNetwork()
 
     test_state = torch.zeros(
         1,
@@ -258,55 +194,26 @@ if __name__ == "__main__":
     )
 
     with torch.no_grad():
-
-        q_values = network(
-            test_state
-        )
-
-    print("=" * 60)
-    print("D3QN NETWORK TEST")
-    print("=" * 60)
+        q_values = network(test_state)
 
     print(network)
 
     print(
         "\nInput shape:",
-        tuple(
-            test_state.shape
-        ),
+        tuple(test_state.shape),
     )
 
     print(
         "Output shape:",
-        tuple(
-            q_values.shape
-        ),
+        tuple(q_values.shape),
     )
 
     print(
         "Expected output actions:",
-        CONFIG[
-            "NUMBER_OF_ACTIONS"
-        ],
-    )
-
-    print(
-        "Hidden size:",
-        CONFIG[
-            "D3QN"
-        ][
-            "hidden_size"
-        ],
+        CONFIG["NUMBER_OF_ACTIONS"],
     )
 
     print(
         "Predicted action index:",
-        int(
-            torch.argmax(
-                q_values,
-                dim=1,
-            ).item()
-        ),
+        int(torch.argmax(q_values, dim=1).item()),
     )
-
-    print("=" * 60)

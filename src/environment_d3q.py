@@ -6,119 +6,250 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from src.actions_d3q import ACTIONS, get_rb_allocation
+from src.actions_common import ACTIONS, get_rb_allocation
 from src.config_d3q import CONFIG
-from src.traffic_d3q import generate_traffic
+from src.traffic_common import generate_traffic
 
 
 class NetworkSlicingD3QEnv(gym.Env):
     """
-    Double Dueling DQN environment for network-slice resource allocation.
+    D3QN environment for dynamic network-slice resource allocation.
 
-    Slices:
+    Network slices:
         - eMBB
         - URLLC1
         - URLLC2
         - BE1
 
-    D3QN action:
-        One integer action index from 0 to 154.
+    Action space:
+        Discrete common resource-allocation action set.
 
-    Each action index selects one of 155 predefined percentage-based
-    resource-allocation settings. Every allocation:
-
-        - uses 5% increments;
-        - provides each slice with at least the configured minimum share;
-        - adds up to exactly 100%.
+        D3QN selects one action index from the same common
+        action set that will also be used by PPO.
 
     State values per slice:
         1. Throughput satisfaction
         2. Latency
-        3. PLR
+        3. Packet Loss Ratio (PLR)
         4. Queue occupancy
         5. Channel condition
         6. Current traffic load
 
-    Total observation size:
-        4 slices × 6 values = 24 values
+    Total state size:
+        4 slices x 6 state features = 24
+
+    Common reward:
+        40% throughput satisfaction
+        35% latency satisfaction
+        25% PLR satisfaction
+
+    Traffic:
+        Low, Medium or High traffic is selected through
+        CONFIG["LOAD_SCENARIO"].
     """
 
-    metadata = {"render_modes": []}
+    metadata = {
+        "render_modes": []
+    }
+
+    # =========================================================
+    # INITIALIZATION
+    # =========================================================
 
     def __init__(self) -> None:
         super().__init__()
 
-        # --------------------------------------------------
-        # Main configuration
-        # --------------------------------------------------
+        # -----------------------------------------------------
+        # Network slices
+        # -----------------------------------------------------
 
-        self.slices = list(CONFIG["SLICES"])
-        self.number_of_slices = len(self.slices)
+        self.slices = list(
+            CONFIG["SLICES"]
+        )
 
-        if len(ACTIONS) != int(CONFIG["NUMBER_OF_ACTIONS"]):
+        self.number_of_slices = len(
+            self.slices
+        )
+
+        # -----------------------------------------------------
+        # Validate common action space
+        # -----------------------------------------------------
+
+        if len(ACTIONS) != int(
+            CONFIG["NUMBER_OF_ACTIONS"]
+        ):
             raise ValueError(
-                "The generated D3QN action count does not match "
-                "NUMBER_OF_ACTIONS."
+                "Generated common action count does not "
+                "match CONFIG['NUMBER_OF_ACTIONS']."
             )
 
-        self.total_rb = float(CONFIG["TOTAL_RB"])
-        self.bits_per_rb = float(CONFIG["BITS_PER_RB"])
-        self.max_time = int(CONFIG["MAX_TIME"])
-        self.buffer_size = int(CONFIG["BUFFER_SIZE"])
-        self.queue_reference = float(CONFIG.get("QUEUE_REFERENCE", 500.0))
+        # -----------------------------------------------------
+        # Network configuration
+        # -----------------------------------------------------
 
-        self.slot_duration_ms = float(CONFIG["SLOT_DURATION_MS"])
-        self.minimum_share = float(
-            CONFIG["MINIMUM_SHARE_PERCENT"]
-        ) / 100.0
+        self.total_rb = int(
+            CONFIG["TOTAL_RB"]
+        )
 
-        self.throughput_window = int(CONFIG["THROUGHPUT_WINDOW"])
-        self.latency_window = int(CONFIG["LATENCY_WINDOW"])
+        self.bits_per_rb = float(
+            CONFIG["BITS_PER_RB"]
+        )
+
+        self.max_time = int(
+            CONFIG["MAX_TIME"]
+        )
+
+        self.slot_duration_ms = float(
+            CONFIG["SLOT_DURATION_MS"]
+        )
+
+        self.buffer_size = int(
+            CONFIG["BUFFER_SIZE"]
+        )
+
+        self.queue_reference = float(
+            CONFIG["QUEUE_REFERENCE"]
+        )
+
+        # -----------------------------------------------------
+        # Minimum allocation
+        # -----------------------------------------------------
+
+        self.minimum_share = (
+            float(
+                CONFIG[
+                    "MINIMUM_SHARE_PERCENT"
+                ]
+            )
+            / 100.0
+        )
+
+        # -----------------------------------------------------
+        # Traffic configuration
+        # -----------------------------------------------------
+
+        self.traffic_load = str(
+            CONFIG["LOAD_SCENARIO"]
+        )
+
+        if self.traffic_load not in CONFIG[
+            "TRAFFIC_SCENARIOS"
+        ]:
+            raise ValueError(
+                f"Invalid traffic scenario: "
+                f"{self.traffic_load}"
+            )
+
+        self.traffic_config = CONFIG[
+            "TRAFFIC_SCENARIOS"
+        ][self.traffic_load].copy()
+
+        # -----------------------------------------------------
+        # QoS and packet deadlines
+        # -----------------------------------------------------
 
         self.qos = CONFIG["QOS"]
-        self.deadline_ms = CONFIG["DEADLINE_MS"]
 
-        self.reward_weights = CONFIG["REWARD_WEIGHTS"]
-        self.reward_penalties = CONFIG.get("REWARD_PENALTIES", {})
+        self.deadline_ms = CONFIG[
+            "DEADLINE_MS"
+        ]
 
-        # --------------------------------------------------
+        # -----------------------------------------------------
+        # Metric history windows
+        # -----------------------------------------------------
+
+        self.throughput_window = int(
+            CONFIG["THROUGHPUT_WINDOW"]
+        )
+
+        self.latency_window = int(
+            CONFIG["LATENCY_WINDOW"]
+        )
+
+        # -----------------------------------------------------
+        # Reward configuration
+        # -----------------------------------------------------
+
+        self.reward_weights = CONFIG[
+            "REWARD_WEIGHTS"
+        ]
+
+        # -----------------------------------------------------
         # Channel configuration
-        # --------------------------------------------------
+        # -----------------------------------------------------
 
-        channel_config = CONFIG["CHANNEL"]
+        channel_config = CONFIG[
+            "CHANNEL"
+        ]
 
-        self.channel_min = float(channel_config["min"])
-        self.channel_max = float(channel_config["max"])
+        self.channel_min = float(
+            channel_config["min"]
+        )
+
+        self.channel_max = float(
+            channel_config["max"]
+        )
+
         self.channel_correlation = float(
             channel_config["correlation"]
         )
-        self.channel_mean = float(channel_config["mean"])
+
+        self.channel_mean = float(
+            channel_config["mean"]
+        )
+
         self.channel_noise_std = float(
             channel_config["noise_std"]
         )
 
-        # --------------------------------------------------
-        # D3QN action space: one of 155 predefined allocations.
-        # --------------------------------------------------
-        self.action_space = spaces.Discrete(len(ACTIONS))
+        # =====================================================
+        # ACTION SPACE
+        # =====================================================
 
-        # --------------------------------------------------
-        # Observation space
-        # --------------------------------------------------
+        self.action_space = spaces.Discrete(
+            len(ACTIONS)
+        )
 
-        # All observation values are normalized to [0, 1].
+        # =====================================================
+        # OBSERVATION SPACE
+        # =====================================================
+
+        expected_state_size = (
+            self.number_of_slices * 6
+        )
+
+        if int(CONFIG["STATE_SIZE"]) != (
+            expected_state_size
+        ):
+            raise ValueError(
+                "CONFIG['STATE_SIZE'] does not match "
+                "4 slices x 6 state features."
+            )
+
         self.observation_space = spaces.Box(
             low=0.0,
             high=1.0,
-            shape=(self.number_of_slices * 6,),
+            shape=(expected_state_size,),
             dtype=np.float32,
         )
 
+        # -----------------------------------------------------
+        # Internal simulation variables
+        # -----------------------------------------------------
+
         self.time = 0
 
-        self.queue: dict[str, list[dict[str, Any]]] = {}
-        self.metrics: dict[str, dict[str, Any]] = {}
+        self.queue: dict[
+            str,
+            list[dict[str, Any]]
+        ] = {}
 
+        self.metrics: dict[
+            str,
+            dict[str, Any]
+        ] = {}
+
+        # Initial equal allocation representation.
         self.last_action = np.full(
             self.number_of_slices,
             1.0 / self.number_of_slices,
@@ -127,38 +258,61 @@ class NetworkSlicingD3QEnv(gym.Env):
 
         self.reset()
 
-    # ======================================================
-    # Gymnasium API
-    # ======================================================
+    # =========================================================
+    # RESET
+    # =========================================================
 
     def reset(
         self,
+        *,
         seed: int | None = None,
         options: dict[str, Any] | None = None,
-    ) -> tuple[np.ndarray, dict[str, Any]]:
+    ) -> tuple[
+        np.ndarray,
+        dict[str, Any],
+    ]:
+        """
+        Reset the network environment.
+
+        Using the same seed for D3QN and PPO during final
+        evaluation helps ensure equivalent random traffic
+        and channel realizations.
+        """
+
         super().reset(seed=seed)
 
+        del options
+
         self.time = 0
+
+        # -----------------------------------------------------
+        # Empty packet queues
+        # -----------------------------------------------------
 
         self.queue = {
             slice_name: []
             for slice_name in self.slices
         }
 
+        # -----------------------------------------------------
+        # Initialize metrics
+        # -----------------------------------------------------
+
         self.metrics = {
+
             # Moving-average throughput satisfaction.
             "throughput_percent": {
                 slice_name: 0.0
                 for slice_name in self.slices
             },
 
-            # Throughput percentage for each simulation step.
+            # Throughput percentage at every simulation step.
             "step_throughput_percent": {
                 slice_name: []
                 for slice_name in self.slices
             },
 
-            # Offered traffic bits in the current step.
+            # Offered bits during current simulation step.
             "step_offered_bits": {
                 slice_name: 0.0
                 for slice_name in self.slices
@@ -170,13 +324,13 @@ class NetworkSlicingD3QEnv(gym.Env):
                 for slice_name in self.slices
             },
 
-            # Latency of successfully served packets, in ms.
+            # Successful packet latency values.
             "latency_ms": {
                 slice_name: []
                 for slice_name in self.slices
             },
 
-            # Packet loss ratio, in percentage.
+            # Packet loss ratio.
             "plr_percent": {
                 slice_name: 0.0
                 for slice_name in self.slices
@@ -196,11 +350,12 @@ class NetworkSlicingD3QEnv(gym.Env):
 
             # Current channel quality.
             "channel": {
-                slice_name: self.channel_mean
+                slice_name:
+                    self.channel_mean
                 for slice_name in self.slices
             },
 
-            # Packets generated in the current step.
+            # Number of new packets during current step.
             "recent_arrivals": {
                 slice_name: 0
                 for slice_name in self.slices
@@ -215,7 +370,16 @@ class NetworkSlicingD3QEnv(gym.Env):
 
         observation = self.get_state()
 
-        return observation, {}
+        info = {
+            "traffic_load":
+                self.traffic_load,
+        }
+
+        return observation, info
+
+    # =========================================================
+    # STEP
+    # =========================================================
 
     def step(
         self,
@@ -227,92 +391,208 @@ class NetworkSlicingD3QEnv(gym.Env):
         bool,
         dict[str, Any],
     ]:
+        """
+        Execute one simulation step.
+        """
+
         self.time += 1
 
+        # -----------------------------------------------------
+        # Validate action
+        # -----------------------------------------------------
+
         action_index = int(action)
-        if not self.action_space.contains(action_index):
+
+        if not self.action_space.contains(
+            action_index
+        ):
             raise ValueError(
-                f"Invalid D3QN action index: {action_index}"
+                f"Invalid D3QN action index: "
+                f"{action_index}"
             )
 
-        selected_action = ACTIONS[action_index]
+        # -----------------------------------------------------
+        # Convert selected action into allocation percentages
+        # -----------------------------------------------------
+
+        selected_action = ACTIONS[
+            action_index
+        ]
+
         allocation_shares = np.asarray(
             [
-                selected_action[slice_name] / 100.0
-                for slice_name in self.slices
+                selected_action[
+                    slice_name
+                ] / 100.0
+                for slice_name
+                in self.slices
             ],
             dtype=np.float32,
         )
-        self.last_action = allocation_shares.copy()
+
+        self.last_action = (
+            allocation_shares.copy()
+        )
 
         allocation_percent = {
-            slice_name: float(selected_action[slice_name])
-            for slice_name in self.slices
+            slice_name: float(
+                selected_action[
+                    slice_name
+                ]
+            )
+            for slice_name
+            in self.slices
         }
 
-        rb_allocation = get_rb_allocation(
-            action_index=action_index,
-            total_rbs=self.total_rb,
+        # -----------------------------------------------------
+        # Convert percentage allocation into RBs
+        # -----------------------------------------------------
+
+        rb_allocation = (
+            get_rb_allocation(
+                action_index=action_index,
+                total_rbs=self.total_rb,
+            )
         )
 
-        # Update channel conditions before transmission.
+        # -----------------------------------------------------
+        # Update time-varying channel
+        # -----------------------------------------------------
+
         self._update_channel_conditions()
 
-        # Generate new packets.
-        generated_traffic = generate_traffic(
-            time_step=self.time,
-            rng=self.np_random,
+        # -----------------------------------------------------
+        # Generate common traffic
+        # -----------------------------------------------------
+
+        generated_traffic = (
+            generate_traffic(
+                time_step=self.time,
+                traffic_config=
+                    self.traffic_config,
+                deadline_config=
+                    self.deadline_ms,
+                slice_names=
+                    self.slices,
+                rng=self.np_random,
+            )
         )
 
+        # -----------------------------------------------------
+        # Add generated packets to queues
+        # -----------------------------------------------------
+
         for slice_name in self.slices:
-            new_packets = generated_traffic[slice_name]
+
+            new_packets = (
+                generated_traffic[
+                    slice_name
+                ]
+            )
 
             offered_bits = sum(
                 float(packet["size"])
-                for packet in new_packets
+                for packet
+                in new_packets
             )
 
-            self.metrics["step_offered_bits"][
-                slice_name
-            ] = offered_bits
+            self.metrics[
+                "step_offered_bits"
+            ][slice_name] = offered_bits
 
-            self.metrics["recent_arrivals"][
-                slice_name
-            ] = len(new_packets)
+            self.metrics[
+                "recent_arrivals"
+            ][slice_name] = len(
+                new_packets
+            )
 
             for packet in new_packets:
-                self.queue[slice_name].append(packet)
-                self.metrics["arrivals"][slice_name] += 1
+
+                self.queue[
+                    slice_name
+                ].append(packet)
+
+                self.metrics[
+                    "arrivals"
+                ][slice_name] += 1
+
+        # -----------------------------------------------------
+        # Record transmitted bits for current step
+        # -----------------------------------------------------
 
         step_throughput_bits = {
             slice_name: 0.0
-            for slice_name in self.slices
+            for slice_name
+            in self.slices
         }
 
-        # Serve packets in every slice.
+        # -----------------------------------------------------
+        # Serve all queues
+        # -----------------------------------------------------
+
         for slice_name in self.slices:
+
             self._serve_slice_packets(
-                slice_name=slice_name,
-                allocated_rbs=rb_allocation[slice_name],
-                step_throughput_bits=step_throughput_bits,
+                slice_name=
+                    slice_name,
+                allocated_rbs=
+                    rb_allocation[
+                        slice_name
+                    ],
+                step_throughput_bits=
+                    step_throughput_bits,
             )
 
-        self._update_metrics(step_throughput_bits)
+        # -----------------------------------------------------
+        # Update metrics
+        # -----------------------------------------------------
 
-        reward = self._calculate_reward(
-            allocation_shares
+        self._update_metrics(
+            step_throughput_bits
         )
 
-        terminated = self.time >= self.max_time
+        # -----------------------------------------------------
+        # Common reward calculation
+        # -----------------------------------------------------
+
+        reward = (
+            self._calculate_reward(
+                allocation_shares
+            )
+        )
+
+        # -----------------------------------------------------
+        # Episode termination
+        # -----------------------------------------------------
+
+        terminated = (
+            self.time
+            >= self.max_time
+        )
+
         truncated = False
 
         observation = self.get_state()
 
+        # -----------------------------------------------------
+        # Additional evaluation information
+        # -----------------------------------------------------
+
         info = {
-            "action_index": action_index,
-            "allocation_percent": allocation_percent,
-            "rb_allocation": rb_allocation,
-            "metrics": self.get_episode_metrics(),
+            "traffic_load":
+                self.traffic_load,
+
+            "action_index":
+                action_index,
+
+            "allocation_percent":
+                allocation_percent,
+
+            "rb_allocation":
+                rb_allocation,
+
+            "metrics":
+                self.get_episode_metrics(),
         }
 
         return (
@@ -323,37 +603,62 @@ class NetworkSlicingD3QEnv(gym.Env):
             info,
         )
 
-    # ======================================================
-    # Packet service
-    # ======================================================
+    # =========================================================
+    # PACKET SERVICE
+    # =========================================================
 
     def _serve_slice_packets(
         self,
         slice_name: str,
-        allocated_rbs: float,
-        step_throughput_bits: dict[str, float],
+        allocated_rbs: int | float,
+        step_throughput_bits:
+            dict[str, float],
     ) -> None:
+        """
+        Serve packets using FIFO scheduling.
+
+        Transmission capacity depends on:
+            allocated RBs
+            x bits per RB
+            x current channel factor
+        """
+
         channel_factor = float(
-            self.metrics["channel"][slice_name]
+            self.metrics[
+                "channel"
+            ][slice_name]
         )
 
         capacity_bits = (
-            allocated_rbs
+            float(allocated_rbs)
             * self.bits_per_rb
             * channel_factor
         )
 
-        remaining_queue: list[dict[str, Any]] = []
+        remaining_queue: list[
+            dict[str, Any]
+        ] = []
 
-        # FIFO packet transmission.
-        for packet in self.queue[slice_name]:
-            packet_size = float(packet["size"])
+        # -----------------------------------------------------
+        # FIFO packet transmission
+        # -----------------------------------------------------
+
+        for packet in self.queue[
+            slice_name
+        ]:
+
+            packet_size = float(
+                packet["size"]
+            )
 
             if packet_size <= capacity_bits:
-                # Minimum latency is one simulation slot.
+
                 waiting_slots = max(
                     1,
-                    self.time - int(packet["arrival"]),
+                    self.time
+                    - int(
+                        packet["arrival"]
+                    ),
                 )
 
                 latency_ms = (
@@ -361,33 +666,53 @@ class NetworkSlicingD3QEnv(gym.Env):
                     * self.slot_duration_ms
                 )
 
-                self.metrics["latency_ms"][
-                    slice_name
-                ].append(float(latency_ms))
+                self.metrics[
+                    "latency_ms"
+                ][slice_name].append(
+                    float(latency_ms)
+                )
 
-                self.metrics["throughput_bits"][
-                    slice_name
-                ] += packet_size
+                self.metrics[
+                    "throughput_bits"
+                ][slice_name] += (
+                    packet_size
+                )
 
                 step_throughput_bits[
                     slice_name
                 ] += packet_size
 
-                capacity_bits -= packet_size
-            else:
-                remaining_queue.append(packet)
+                capacity_bits -= (
+                    packet_size
+                )
 
-        # Drop expired packets.
-        valid_packets: list[dict[str, Any]] = []
+            else:
+                remaining_queue.append(
+                    packet
+                )
+
+        # -----------------------------------------------------
+        # Drop expired packets
+        # -----------------------------------------------------
+
+        valid_packets: list[
+            dict[str, Any]
+        ] = []
 
         deadline_ms = float(
-            self.deadline_ms[slice_name]
+            self.deadline_ms[
+                slice_name
+            ]
         )
 
         for packet in remaining_queue:
+
             waiting_slots = max(
                 1,
-                self.time - int(packet["arrival"]),
+                self.time
+                - int(
+                    packet["arrival"]
+                ),
             )
 
             waiting_time_ms = (
@@ -395,56 +720,83 @@ class NetworkSlicingD3QEnv(gym.Env):
                 * self.slot_duration_ms
             )
 
-            if waiting_time_ms > deadline_ms:
-                self.metrics["dropped"][
-                    slice_name
-                ] += 1
+            if (
+                waiting_time_ms
+                > deadline_ms
+            ):
+                self.metrics[
+                    "dropped"
+                ][slice_name] += 1
+
             else:
-                valid_packets.append(packet)
+                valid_packets.append(
+                    packet
+                )
 
-        remaining_queue = valid_packets
+        remaining_queue = (
+            valid_packets
+        )
 
-        # Apply queue buffer limit.
-        if len(remaining_queue) > self.buffer_size:
+        # -----------------------------------------------------
+        # Apply queue buffer limit
+        # -----------------------------------------------------
+
+        if (
+            len(remaining_queue)
+            > self.buffer_size
+        ):
+
             overflow_count = (
                 len(remaining_queue)
                 - self.buffer_size
             )
 
-            self.metrics["dropped"][
-                slice_name
-            ] += overflow_count
+            self.metrics[
+                "dropped"
+            ][slice_name] += (
+                overflow_count
+            )
 
-            # Keep oldest packets for FIFO behaviour.
-            remaining_queue = remaining_queue[
-                : self.buffer_size
-            ]
+            # Keep oldest packets for FIFO behavior.
+            remaining_queue = (
+                remaining_queue[
+                    :self.buffer_size
+                ]
+            )
 
-        self.queue[slice_name] = remaining_queue
+        self.queue[
+            slice_name
+        ] = remaining_queue
 
-    # ======================================================
-    # Channel model
-    # ======================================================
+    # =========================================================
+    # CHANNEL MODEL
+    # =========================================================
 
-    def _update_channel_conditions(self) -> None:
+    def _update_channel_conditions(
+        self,
+    ) -> None:
         """
-        Update channel conditions using a correlated random process.
+        Update channel quality using a correlated
+        random process.
 
-        This is more realistic than independently selecting a completely
-        new channel condition at each time step.
+        This produces gradually varying radio
+        conditions rather than independently
+        random channel values at every step.
         """
 
         for slice_name in self.slices:
+
             previous_channel = float(
-                self.metrics["channel"][
-                    slice_name
-                ]
+                self.metrics[
+                    "channel"
+                ][slice_name]
             )
 
             channel_noise = float(
                 self.np_random.normal(
                     loc=0.0,
-                    scale=self.channel_noise_std,
+                    scale=
+                        self.channel_noise_std,
                 )
             )
 
@@ -459,9 +811,9 @@ class NetworkSlicingD3QEnv(gym.Env):
                 + channel_noise
             )
 
-            self.metrics["channel"][
-                slice_name
-            ] = float(
+            self.metrics[
+                "channel"
+            ][slice_name] = float(
                 np.clip(
                     new_channel,
                     self.channel_min,
@@ -469,30 +821,53 @@ class NetworkSlicingD3QEnv(gym.Env):
                 )
             )
 
-    # ======================================================
-    # Metrics
-    # ======================================================
+    # =========================================================
+    # UPDATE PERFORMANCE METRICS
+    # =========================================================
 
     def _update_metrics(
         self,
-        step_throughput_bits: dict[str, float],
+        step_throughput_bits:
+            dict[str, float],
     ) -> None:
+        """
+        Update throughput and packet-loss metrics.
+        """
+
         for slice_name in self.slices:
+
             offered_bits = float(
-                self.metrics["step_offered_bits"][slice_name]
-            )
-            served_bits = float(
-                step_throughput_bits[slice_name]
+                self.metrics[
+                    "step_offered_bits"
+                ][slice_name]
             )
 
+            served_bits = float(
+                step_throughput_bits[
+                    slice_name
+                ]
+            )
+
+            # -------------------------------------------------
+            # Throughput satisfaction
+            # -------------------------------------------------
+
             if offered_bits > 0.0:
+
                 throughput_percent = (
-                    served_bits / offered_bits
+                    served_bits
+                    / offered_bits
                 ) * 100.0
+
             else:
+
                 throughput_percent = (
                     100.0
-                    if len(self.queue[slice_name]) == 0
+                    if len(
+                        self.queue[
+                            slice_name
+                        ]
+                    ) == 0
                     else 0.0
                 )
 
@@ -504,9 +879,11 @@ class NetworkSlicingD3QEnv(gym.Env):
                 )
             )
 
-            throughput_history = self.metrics[
-                "step_throughput_percent"
-            ][slice_name]
+            throughput_history = (
+                self.metrics[
+                    "step_throughput_percent"
+                ][slice_name]
+            )
 
             throughput_history.append(
                 throughput_percent
@@ -518,36 +895,45 @@ class NetworkSlicingD3QEnv(gym.Env):
                 ]
             )
 
-            self.metrics["throughput_percent"][
-                slice_name
-            ] = float(
-                np.mean(recent_throughput)
+            self.metrics[
+                "throughput_percent"
+            ][slice_name] = float(
+                np.mean(
+                    recent_throughput
+                )
                 if recent_throughput
                 else 0.0
             )
 
+            # -------------------------------------------------
+            # Packet Loss Ratio
+            # -------------------------------------------------
+
             arrivals = int(
-                self.metrics["arrivals"][
-                    slice_name
-                ]
+                self.metrics[
+                    "arrivals"
+                ][slice_name]
             )
 
             dropped = int(
-                self.metrics["dropped"][
-                    slice_name
-                ]
+                self.metrics[
+                    "dropped"
+                ][slice_name]
             )
 
             if arrivals > 0:
+
                 plr_percent = (
-                    dropped / arrivals
+                    dropped
+                    / arrivals
                 ) * 100.0
+
             else:
                 plr_percent = 0.0
 
-            self.metrics["plr_percent"][
-                slice_name
-            ] = float(
+            self.metrics[
+                "plr_percent"
+            ][slice_name] = float(
                 np.clip(
                     plr_percent,
                     0.0,
@@ -555,138 +941,227 @@ class NetworkSlicingD3QEnv(gym.Env):
                 )
             )
 
-    # ======================================================
-    # Reward function
-    # ======================================================
+    # =========================================================
+    # COMMON REWARD FUNCTION
+    # =========================================================
 
     def _calculate_reward(
         self,
         action: np.ndarray,
     ) -> float:
         """
-        Calculate one normalized reward for all four slices.
+        Common reward used for both D3QN and PPO.
 
-        For every slice, the reward includes:
-            - throughput score in the range 0 to 1;
-            - latency score derived from latency in milliseconds;
-            - PLR score derived from PLR percentage.
+        Reward:
+            40% Throughput satisfaction
+            35% Latency satisfaction
+            25% PLR satisfaction
 
-        The final reward is the mean of the four slice rewards.
-
-        Not used:
-            - global penalty;
-            - starvation penalty;
-            - Jain fairness;
-            - worst-slice protection.
+        The selected RB allocation influences network
+        performance, but the action itself is not
+        directly rewarded or penalized.
         """
 
         del action
 
         throughput_weight = float(
-            self.reward_weights["throughput"]
+            self.reward_weights[
+                "throughput"
+            ]
         )
+
         latency_weight = float(
-            self.reward_weights["latency"]
+            self.reward_weights[
+                "latency"
+            ]
         )
+
         plr_weight = float(
-            self.reward_weights["plr"]
+            self.reward_weights[
+                "plr"
+            ]
         )
 
-        weight_sum = (
-            throughput_weight
-            + latency_weight
-            + plr_weight
-        )
-
-        if not np.isclose(weight_sum, 1.0):
-            raise ValueError(
-                "Throughput, latency and PLR reward weights "
-                f"must sum to 1.0, but sum to {weight_sum:.4f}."
-            )
-
-        slice_rewards: list[float] = []
+        slice_rewards: list[
+            float
+        ] = []
 
         for slice_name in self.slices:
+
+            # -------------------------------------------------
+            # Throughput score
+            # -------------------------------------------------
+
             throughput_percent = float(
-                self.metrics["throughput_percent"][slice_name]
+                self.metrics[
+                    "throughput_percent"
+                ][slice_name]
             )
+
             throughput_score = float(
                 np.clip(
-                    throughput_percent / 100.0,
+                    throughput_percent
+                    / 100.0,
                     0.0,
                     1.0,
                 )
             )
 
-            latency_history = self.metrics["latency_ms"][slice_name]
-            recent_latencies = latency_history[-self.latency_window:]
-            latency_requirement_ms = float(
-                self.qos[slice_name]["latency_req_ms"]
+            # -------------------------------------------------
+            # Latency score
+            # -------------------------------------------------
+
+            latency_history = (
+                self.metrics[
+                    "latency_ms"
+                ][slice_name]
+            )
+
+            recent_latencies = (
+                latency_history[
+                    -self.latency_window:
+                ]
             )
 
             if recent_latencies:
-                average_latency_ms = float(np.mean(recent_latencies))
+
+                average_latency_ms = (
+                    float(
+                        np.mean(
+                            recent_latencies
+                        )
+                    )
+                )
+
             else:
-                average_latency_ms = latency_requirement_ms
+
+                # No successful packet transmission.
+                # Do not automatically assign perfect latency.
+                average_latency_ms = float(
+                    self.qos[
+                        slice_name
+                    ][
+                        "latency_req_ms"
+                    ]
+                )
+
+            required_latency_ms = float(
+                self.qos[
+                    slice_name
+                ][
+                    "latency_req_ms"
+                ]
+            )
 
             latency_score = float(
                 np.clip(
                     1.0
-                    - average_latency_ms
-                    / max(latency_requirement_ms, 1e-8),
+                    - (
+                        average_latency_ms
+                        / max(
+                            required_latency_ms,
+                            1e-8,
+                        )
+                    ),
                     0.0,
                     1.0,
                 )
             )
 
+            # -------------------------------------------------
+            # PLR score
+            # -------------------------------------------------
+
             plr_percent = float(
-                self.metrics["plr_percent"][slice_name]
+                self.metrics[
+                    "plr_percent"
+                ][slice_name]
             )
-            plr_requirement_percent = float(
-                self.qos[slice_name]["plr_req"]
+
+            required_plr = float(
+                self.qos[
+                    slice_name
+                ][
+                    "plr_req"
+                ]
             )
+
             plr_score = float(
                 np.clip(
                     1.0
-                    - plr_percent
-                    / max(plr_requirement_percent, 1e-8),
+                    - (
+                        plr_percent
+                        / max(
+                            required_plr,
+                            1e-8,
+                        )
+                    ),
                     0.0,
                     1.0,
                 )
             )
 
+            # -------------------------------------------------
+            # Combined slice reward
+            # -------------------------------------------------
+
             slice_reward = (
-                throughput_weight * throughput_score
-                + latency_weight * latency_score
-                + plr_weight * plr_score
+                throughput_weight
+                * throughput_score
+
+                + latency_weight
+                * latency_score
+
+                + plr_weight
+                * plr_score
             )
 
             slice_rewards.append(
-                float(np.clip(slice_reward, 0.0, 1.0))
+                float(slice_reward)
             )
 
-        total_reward = float(np.mean(slice_rewards))
+        total_reward = float(
+            np.mean(
+                slice_rewards
+            )
+        )
 
-        return float(np.clip(total_reward, 0.0, 1.0))
+        return float(
+            np.clip(
+                total_reward,
+                0.0,
+                1.0,
+            )
+        )
 
-    # ======================================================
-    # State representation
-    # ======================================================
+    # =========================================================
+    # STATE REPRESENTATION
+    # =========================================================
 
-    def get_state(self) -> np.ndarray:
+    def get_state(
+        self,
+    ) -> np.ndarray:
         """
-        Return a normalized 24-value state vector.
+        Return the normalized 24-dimensional state.
 
-        Per slice:
-            throughput, latency, PLR, queue, channel, traffic load
+        For each slice:
+            1. Throughput
+            2. Latency
+            3. PLR
+            4. Queue occupancy
+            5. Channel condition
+            6. Traffic load
         """
 
-        state: list[float] = []
+        state: list[
+            float
+        ] = []
 
         for slice_name in self.slices:
-            # ----------------------------------------------
+
+            # -------------------------------------------------
             # Throughput
-            # ----------------------------------------------
+            # -------------------------------------------------
 
             throughput_normalized = float(
                 np.clip(
@@ -699,26 +1174,34 @@ class NetworkSlicingD3QEnv(gym.Env):
                 )
             )
 
-            # ----------------------------------------------
+            # -------------------------------------------------
             # Latency
-            # ----------------------------------------------
+            # -------------------------------------------------
 
-            latency_history = self.metrics[
-                "latency_ms"
-            ][slice_name]
+            latency_history = (
+                self.metrics[
+                    "latency_ms"
+                ][slice_name]
+            )
 
-            recent_latencies = latency_history[
-                -self.latency_window:
-            ]
+            recent_latencies = (
+                latency_history[
+                    -self.latency_window:
+                ]
+            )
 
             average_latency_ms = float(
-                np.mean(recent_latencies)
+                np.mean(
+                    recent_latencies
+                )
                 if recent_latencies
                 else 0.0
             )
 
             required_latency_ms = float(
-                self.qos[slice_name][
+                self.qos[
+                    slice_name
+                ][
                     "latency_req_ms"
                 ]
             )
@@ -736,28 +1219,32 @@ class NetworkSlicingD3QEnv(gym.Env):
                 )
             )
 
-            # ----------------------------------------------
+            # -------------------------------------------------
             # PLR
-            # ----------------------------------------------
+            # -------------------------------------------------
 
             plr_normalized = float(
                 np.clip(
-                    self.metrics["plr_percent"][
-                        slice_name
-                    ]
+                    self.metrics[
+                        "plr_percent"
+                    ][slice_name]
                     / 100.0,
                     0.0,
                     1.0,
                 )
             )
 
-            # ----------------------------------------------
+            # -------------------------------------------------
             # Queue occupancy
-            # ----------------------------------------------
+            # -------------------------------------------------
 
             queue_normalized = float(
                 np.clip(
-                    len(self.queue[slice_name])
+                    len(
+                        self.queue[
+                            slice_name
+                        ]
+                    )
                     / max(
                         self.queue_reference,
                         1.0,
@@ -767,14 +1254,14 @@ class NetworkSlicingD3QEnv(gym.Env):
                 )
             )
 
-            # ----------------------------------------------
+            # -------------------------------------------------
             # Channel condition
-            # ----------------------------------------------
+            # -------------------------------------------------
 
             channel_value = float(
-                self.metrics["channel"][
-                    slice_name
-                ]
+                self.metrics[
+                    "channel"
+                ][slice_name]
             )
 
             channel_normalized = float(
@@ -793,9 +1280,9 @@ class NetworkSlicingD3QEnv(gym.Env):
                 )
             )
 
-            # ----------------------------------------------
-            # Traffic load
-            # ----------------------------------------------
+            # -------------------------------------------------
+            # Current traffic load
+            # -------------------------------------------------
 
             recent_arrivals = int(
                 self.metrics[
@@ -805,11 +1292,16 @@ class NetworkSlicingD3QEnv(gym.Env):
 
             traffic_load_normalized = float(
                 np.clip(
-                    recent_arrivals / 20.0,
+                    recent_arrivals
+                    / 20.0,
                     0.0,
                     1.0,
                 )
             )
+
+            # -------------------------------------------------
+            # Append six features
+            # -------------------------------------------------
 
             state.extend(
                 [
@@ -827,54 +1319,114 @@ class NetworkSlicingD3QEnv(gym.Env):
             dtype=np.float32,
         )
 
+        if (
+            state_array.shape[0]
+            != CONFIG["STATE_SIZE"]
+        ):
+            raise RuntimeError(
+                f"State contains "
+                f"{state_array.shape[0]} values, "
+                f"but CONFIG['STATE_SIZE'] is "
+                f"{CONFIG['STATE_SIZE']}."
+            )
+
         return np.clip(
             state_array,
             0.0,
             1.0,
-        ).astype(np.float32)
+        ).astype(
+            np.float32
+        )
 
-    # ======================================================
-    # Human-readable evaluation metrics
-    # ======================================================
+    # =========================================================
+    # EPISODE METRICS
+    # =========================================================
 
     def get_episode_metrics(
         self,
-    ) -> dict[str, dict[str, float | int]]:
+    ) -> dict[
+        str,
+        dict[
+            str,
+            float | int
+        ],
+    ]:
+        """
+        Return readable evaluation metrics for all slices.
+        """
+
         results: dict[
             str,
-            dict[str, float | int],
+            dict[
+                str,
+                float | int
+            ],
         ] = {}
 
         for slice_name in self.slices:
-            latency_history = self.metrics[
-                "latency_ms"
-            ][slice_name]
+
+            # -------------------------------------------------
+            # Latency and jitter
+            # -------------------------------------------------
+
+            latency_history = (
+                self.metrics[
+                    "latency_ms"
+                ][slice_name]
+            )
 
             if latency_history:
+
                 average_latency_ms = float(
-                    np.mean(latency_history)
+                    np.mean(
+                        latency_history
+                    )
                 )
 
                 jitter_ms = float(
-                    np.std(latency_history)
-                    if len(latency_history) > 1
+                    np.std(
+                        latency_history
+                    )
+                    if len(
+                        latency_history
+                    ) > 1
                     else 0.0
                 )
+
             else:
+
                 average_latency_ms = 0.0
+
                 jitter_ms = 0.0
 
-            throughput_history = self.metrics[
-                "step_throughput_percent"
-            ][slice_name]
+            # -------------------------------------------------
+            # Average throughput
+            # -------------------------------------------------
 
-            average_throughput_percent = float(
-                np.mean(throughput_history)
+            throughput_history = (
+                self.metrics[
+                    "step_throughput_percent"
+                ][slice_name]
+            )
+
+            average_throughput_percent = (
+                float(
+                    np.mean(
+                        throughput_history
+                    )
+                )
                 if throughput_history
                 else 0.0
             )
 
-            results[slice_name] = {
+            # -------------------------------------------------
+            # Save slice metrics
+            # -------------------------------------------------
+
+            results[
+                slice_name
+            ] = {
+
                 "average_throughput_percent":
                     average_throughput_percent,
 
@@ -885,7 +1437,6 @@ class NetworkSlicingD3QEnv(gym.Env):
                         ][slice_name]
                     ),
 
-                # Latency is reported only in milliseconds.
                 "average_latency_ms":
                     average_latency_ms,
 
@@ -894,33 +1445,39 @@ class NetworkSlicingD3QEnv(gym.Env):
 
                 "plr_percent":
                     float(
-                        self.metrics["plr_percent"][
-                            slice_name
-                        ]
+                        self.metrics[
+                            "plr_percent"
+                        ][slice_name]
                     ),
 
                 "queue_length":
-                    len(self.queue[slice_name]),
+                    int(
+                        len(
+                            self.queue[
+                                slice_name
+                            ]
+                        )
+                    ),
 
                 "channel_condition":
                     float(
-                        self.metrics["channel"][
-                            slice_name
-                        ]
+                        self.metrics[
+                            "channel"
+                        ][slice_name]
                     ),
 
                 "arrivals":
                     int(
-                        self.metrics["arrivals"][
-                            slice_name
-                        ]
+                        self.metrics[
+                            "arrivals"
+                        ][slice_name]
                     ),
 
                 "dropped":
                     int(
-                        self.metrics["dropped"][
-                            slice_name
-                        ]
+                        self.metrics[
+                            "dropped"
+                        ][slice_name]
                     ),
 
                 "total_throughput_bits":
