@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This project investigates **Deep Reinforcement Learning (DRL)-assisted dynamic radio resource allocation** for network slicing in Beyond 5G (B5G) / 6G networks.
+This project investigates **Deep Reinforcement Learning (DRL)-assisted dynamic resource allocation** for network slicing in Beyond 5G (B5G) / 6G networks.
 
 The objective is to dynamically allocate a fixed pool of **100 Resource Blocks (RBs)** among four network slices while adapting to changing traffic conditions and Quality of Service (QoS) requirements.
 
