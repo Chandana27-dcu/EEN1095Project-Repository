@@ -11,7 +11,7 @@ The proposed method is a **Double Dueling Deep Q-Network (D3QN)**. Its performan
 - **Proximal Policy Optimization (PPO)** — DRL comparison method
 - **Static Equal Allocation (SEA)** — conventional non-learning baseline
 
-The final implementation was corrected and validated following supervisor feedback to ensure that all methods are evaluated under a common and fair simulation setup.
+The final implementation was corrected and validated to ensure that all methods are evaluated under a common and fair simulation setup.
 
 ---
 
@@ -549,83 +549,6 @@ SEA  → Green
 
 ---
 
-# Supervisor Feedback Addressed
-
-## 1. Remove Old / Unnecessary Files
-
-Completed:
-
-- Previous implementation files and old experimental outputs moved to:
-  ```text
-  archive/pre_supervisor_cleanup_20260810/
-  ```
-- Active folders contain the corrected implementation only.
-
-## 2. Ensure Fair Comparison Between Methods
-
-Completed:
-
-- Same state representation
-- Same action space
-- Same total RBs
-- Same traffic definitions
-- Same reward formulation
-- Same evaluation framework
-- Final fairness test added
-
-## 3. Plot Reward Timeline / Convergence
-
-Completed:
-
-```text
-results/d3qn_vs_ppo_convergence.png
-```
-
-## 4. Use Consistent Plot Colors and Name the Baseline
-
-Completed:
-
-```text
-D3QN → Blue
-PPO  → Orange
-Static Equal Allocation (SEA) → Green
-```
-
-## 5. Explain Low, Medium and High Traffic
-
-Completed:
-
-- Explicit Low, Medium and High traffic definitions are documented and used consistently.
-
-## 6. Show the Baseline Implementation
-
-Completed:
-
-```text
-src/baseline_fixed.py
-src/evaluate_baseline.py
-```
-
-SEA uses fixed:
-
-```text
-25 / 25 / 25 / 25
-```
-
-RB allocation.
-
-## 7. Justify the Predetermined Action Space
-
-Completed:
-
-- 5% allocation increments
-- minimum 5% allocation per slice
-- 969 feasible constrained allocations
-- deterministic farthest-point sampling
-- 155 representative actions
-
----
-
 # Reproducibility Notes
 
 Use the final trained Medium-traffic models:
@@ -665,22 +588,6 @@ Possible extensions include:
 - adaptive or multi-objective reward design
 - SAC / TD3 / multi-agent reinforcement learning
 - real-time or hardware/testbed validation
-
----
-
-# Final Project Status
-
-```text
-Implementation             COMPLETE
-Supervisor corrections     COMPLETE
-Fairness validation        COMPLETE
-D3QN model validation      COMPLETE
-PPO model validation       COMPLETE
-Action-space validation    COMPLETE
-Final evaluation           COMPLETE
-Final plots                COMPLETE
-Legacy-file archive        COMPLETE
-```
 
 ---
 
