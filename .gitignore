@@ -17,3 +17,6 @@ results/archive/
 
 .DS_Store
 Thumbs.db
+
+# Intermediate checkpoint models
+models/epoch_checkpoints/
