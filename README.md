@@ -4,14 +4,14 @@
 
 This project investigates **Deep Reinforcement Learning (DRL)-assisted dynamic resource allocation** for network slicing in Beyond 5G (B5G) / 6G networks.
 
-The objective is to dynamically allocate a fixed pool of **100 Resource Blocks (RBs)** among four network slices while adapting to changing traffic conditions and Quality of Service (QoS) requirements.
+The objective is to dynamically redistribute a fixed pool of **100 Resource Blocks (RBs)** among four network slices according to changing traffic conditions and Quality of Service (QoS) requirements.
 
 The proposed method is a **Double Dueling Deep Q-Network (D3QN)**. Its performance is compared with:
 
 - **Proximal Policy Optimization (PPO)** — DRL comparison method
 - **Static Equal Allocation (SEA)** — conventional non-learning baseline
 
-The final implementation was corrected and validated to ensure that all methods are evaluated under a common and fair simulation setup.
+All three methods are evaluated under a common simulation setup so that the state representation, action space, traffic model, channel model, reward logic, resource budget and evaluation conditions remain consistent.
 
 ---
 
@@ -34,7 +34,7 @@ TOTAL_RB = 100
 
 ---
 
-## Final Common Simulation Setup
+## Common Simulation Setup
 
 | Parameter | Value |
 |---|---:|
@@ -48,7 +48,7 @@ TOTAL_RB = 100
 | Reward latency weight | 0.35 |
 | Reward PLR weight | 0.25 |
 
-The corrected D3QN and PPO implementations use the same traffic definitions, channel model, action mapping, reward logic and evaluation conditions.
+D3QN and PPO use the same traffic definitions, channel model, action mapping, reward logic and evaluation conditions.
 
 ---
 
@@ -93,9 +93,9 @@ The full constrained search produces:
 969 feasible allocations
 ```
 
-A representative set of **155 actions** is then selected using **deterministic farthest-point sampling**.
+A representative set of **155 actions** is selected using **deterministic farthest-point sampling**.
 
-The selection procedure:
+The selection procedure is:
 
 1. Generate all feasible allocations.
 2. Start with the allocation closest to equal sharing.
@@ -212,7 +212,7 @@ Training uses a `PrioritizedReplayBuffer`, allowing more informative experiences
 
 PPO provides a policy-gradient / actor-critic comparison against the value-based D3QN approach.
 
-The final PPO implementation uses the same corrected state representation, action space, traffic scenarios and environment assumptions.
+The PPO implementation uses the same state representation, action space, traffic scenarios and environment assumptions as D3QN.
 
 ---
 
@@ -236,7 +236,7 @@ RB allocation and does not adapt to the current network state.
 
 # Training Methodology
 
-The final methodology is:
+The main methodology is:
 
 ```text
 Train D3QN on Medium Traffic
@@ -258,11 +258,117 @@ models/d3qn_medium_load.pth
 models/ppo_medium_load.zip
 ```
 
+Training on Medium traffic and evaluating the frozen policies on Low, Medium and High traffic provides a controlled way to examine generalization across traffic conditions.
+
+---
+
+# Per-Episode Training and Testing Analysis
+
+An additional checkpoint-based experiment is included to show **training and testing performance as learning progresses**.
+
+In reinforcement learning, the term **episode** is used here rather than epoch.
+
+## Experiment design
+
+D3QN and PPO are trained under the **Medium traffic scenario** for 200 episodes. Intermediate policies are saved every 10 episodes:
+
+```text
+10, 20, 30, ..., 200
+```
+
+Each checkpoint is then tested using the same fixed seeds:
+
+```text
+42, 43, 44, 45, 46, 47, 48, 49, 50, 51
+```
+
+The checkpoint-testing conditions are:
+
+| Setting | Value |
+|---|---|
+| Traffic scenario | Medium |
+| Checkpoint interval | 10 episodes |
+| Total training episodes | 200 |
+| Test runs per checkpoint | 10 |
+| Test seeds | 42–51 |
+| Episode length | 500 steps |
+| D3QN testing | Greedy action selection / no exploration |
+| PPO testing | `deterministic=True` |
+| SEA testing | Fixed action 95 = 25/25/25/25 |
+
+The learning methods are evaluated without additional learning during testing.
+
+### Why SEA has no training curve
+
+SEA is a **non-learning** baseline. It therefore does not have training episodes or a convergence curve. During checkpoint testing, SEA is evaluated under the same Medium-traffic conditions and fixed test seeds and is shown as a constant reference.
+
+## Per-episode result files
+
+```text
+results/epoch_analysis/d3qn_training_per_episode.csv
+results/epoch_analysis/ppo_training_per_episode.csv
+results/epoch_analysis/checkpoint_testing_detailed.csv
+results/epoch_analysis/checkpoint_testing_summary.csv
+```
+
+## Per-episode plots
+
+```text
+results/epoch_analysis/01_training_reward_vs_episode.png
+results/epoch_analysis/02_testing_reward_vs_episode.png
+results/epoch_analysis/03_testing_throughput_vs_episode.png
+results/epoch_analysis/04_testing_latency_vs_episode.png
+results/epoch_analysis/05_testing_jitter_vs_episode.png
+results/epoch_analysis/06_testing_plr_vs_episode.png
+```
+
+### Training reward vs episode
+
+![Training Reward vs Episode](results/epoch_analysis/01_training_reward_vs_episode.png)
+
+The training graph contains D3QN and PPO only because SEA does not learn.
+
+### Testing reward vs checkpoint episode
+
+![Testing Reward vs Checkpoint Episode](results/epoch_analysis/02_testing_reward_vs_episode.png)
+
+The testing graph compares D3QN, PPO and SEA using the same fixed test seeds at every checkpoint.
+
+### Testing throughput vs checkpoint episode
+
+![Testing Throughput vs Checkpoint Episode](results/epoch_analysis/03_testing_throughput_vs_episode.png)
+
+### Testing latency vs checkpoint episode
+
+![Testing Latency vs Checkpoint Episode](results/epoch_analysis/04_testing_latency_vs_episode.png)
+
+### Testing jitter vs checkpoint episode
+
+![Testing Jitter vs Checkpoint Episode](results/epoch_analysis/05_testing_jitter_vs_episode.png)
+
+### Testing PLR vs checkpoint episode
+
+![Testing PLR vs Checkpoint Episode](results/epoch_analysis/06_testing_plr_vs_episode.png)
+
+## Episode-200 Medium-traffic checkpoint result
+
+At the final checkpoint, the mean Medium-traffic test results are:
+
+| Method | Reward | Throughput | Latency | Jitter | PLR |
+|---|---:|---:|---:|---:|---:|
+| D3QN | 249.509 | 43.06% | 41.52 ms | 18.63 ms | 48.81% |
+| PPO | 247.077 | 48.79% | 0.56 ms | 0.22 ms | 45.03% |
+| SEA | 169.256 | 41.83% | 5.08 ms | 1.03 ms | 52.56% |
+
+These values should be interpreted as a multi-metric trade-off rather than as evidence that one method dominates all QoS measures.
+
+Latency and jitter should be interpreted together with PLR because delay statistics are calculated for successfully served packets.
+
 ---
 
 # Evaluation Metrics
 
-The final evaluation compares D3QN, PPO and SEA using:
+D3QN, PPO and SEA are compared using:
 
 - Reward
 - Throughput
@@ -280,11 +386,9 @@ Jitter      ↓ lower is better
 PLR         ↓ lower is better
 ```
 
-Latency should be interpreted together with PLR because delay statistics are calculated for packets that are successfully served.
-
 ---
 
-# Final Evaluation
+# Final Low / Medium / High Evaluation
 
 The common final evaluation is implemented in:
 
@@ -322,12 +426,12 @@ results/d3qn_vs_ppo_convergence.png
 
 # Main Result Interpretation
 
-The final experiments show that there is no single method that dominates every metric and every traffic condition.
+The experiments show that there is no single method that dominates every metric and every traffic condition.
 
-Main observations:
+Main observations from the final Low / Medium / High comparison are:
 
 - D3QN achieves the strongest aggregate reward under Low traffic.
-- D3QN and PPO are close under Medium traffic, with D3QN slightly higher in the final experiment.
+- D3QN and PPO are close under Medium traffic, with D3QN slightly higher in aggregate reward in the final experiment.
 - PPO performs strongly on several individual QoS metrics.
 - PPO obtains the strongest reward under High traffic.
 - SEA provides a useful conventional benchmark but cannot adapt to changing traffic conditions.
@@ -350,6 +454,18 @@ EEN1095Project-Repository/
 |   `-- ppo_medium_load.zip
 |
 |-- results/
+|   |-- epoch_analysis/
+|   |   |-- d3qn_training_per_episode.csv
+|   |   |-- ppo_training_per_episode.csv
+|   |   |-- checkpoint_testing_detailed.csv
+|   |   |-- checkpoint_testing_summary.csv
+|   |   |-- 01_training_reward_vs_episode.png
+|   |   |-- 02_testing_reward_vs_episode.png
+|   |   |-- 03_testing_throughput_vs_episode.png
+|   |   |-- 04_testing_latency_vs_episode.png
+|   |   |-- 05_testing_jitter_vs_episode.png
+|   |   `-- 06_testing_plr_vs_episode.png
+|   |
 |   |-- final_plots/
 |   |-- baseline_medium_results.csv
 |   |-- d3qn_medium_training_history.csv
@@ -370,18 +486,25 @@ EEN1095Project-Repository/
 |   |-- environment_ppo.py
 |   |-- evaluate_all.py
 |   |-- evaluate_baseline.py
+|   |-- evaluate_epoch_checkpoints.py
 |   |-- network_d3q.py
 |   |-- plot_convergence.py
+|   |-- plot_epoch_results.py
 |   |-- plot_final_results.py
 |   |-- prioritized_replay.py
 |   |-- traffic_common.py
 |   |-- train_d3q.py
+|   |-- train_epoch_checkpoints.py
 |   `-- train_ppo.py
 |
 |-- test_all_methods_fairness.py
 |-- .gitignore
+|-- environment_info.txt
+|-- requirements.txt
 `-- README.md
 ```
+
+Intermediate checkpoint model files used for the per-episode experiment are intentionally excluded from Git tracking and can be regenerated using `src/train_epoch_checkpoints.py`.
 
 ---
 
@@ -395,16 +518,19 @@ EEN1095Project-Repository/
 | `src/config_ppo.py` | PPO configuration |
 | `src/environment_d3q.py` | D3QN network slicing environment |
 | `src/environment_ppo.py` | PPO-compatible environment |
-| `src/evaluate_all.py` | Common evaluation for D3QN, PPO and SEA |
+| `src/evaluate_all.py` | Common Low / Medium / High evaluation for D3QN, PPO and SEA |
 | `src/evaluate_baseline.py` | Standalone baseline evaluation |
+| `src/evaluate_epoch_checkpoints.py` | Tests saved D3QN/PPO checkpoints and SEA using fixed Medium-traffic test seeds |
 | `src/network_d3q.py` | Dueling Q-Network architecture |
 | `src/plot_convergence.py` | D3QN/PPO convergence plotting |
-| `src/plot_final_results.py` | Final performance plots |
+| `src/plot_epoch_results.py` | Generates per-episode training and checkpoint-testing plots |
+| `src/plot_final_results.py` | Generates Low / Medium / High final performance plots |
 | `src/prioritized_replay.py` | Prioritized Experience Replay |
 | `src/traffic_common.py` | Common traffic generation |
 | `src/train_d3q.py` | D3QN training |
+| `src/train_epoch_checkpoints.py` | Trains D3QN/PPO and saves intermediate policies every 10 episodes |
 | `src/train_ppo.py` | PPO training |
-| `test_all_methods_fairness.py` | Final fairness and environment sanity test |
+| `test_all_methods_fairness.py` | Fairness and environment sanity test |
 
 ---
 
@@ -429,13 +555,11 @@ python -m venv .venv
 
 ## 3. Install dependencies
 
-If `requirements.txt` is available:
-
 ```powershell
 pip install -r requirements.txt
 ```
 
-Main dependencies:
+Main dependencies include:
 
 ```text
 numpy
@@ -450,7 +574,7 @@ stable-baselines3
 
 # Validation and Testing
 
-## Compile all final Python files
+## Compile all Python files
 
 ```powershell
 Get-ChildItem "src\*.py" | ForEach-Object {
@@ -460,7 +584,7 @@ Get-ChildItem "src\*.py" | ForEach-Object {
 
 No output indicates successful compilation.
 
-## Run the final fairness test
+## Run the fairness test
 
 ```powershell
 python test_all_methods_fairness.py
@@ -521,25 +645,52 @@ python -c "from stable_baselines3 import PPO; PPO.load('models/ppo_medium_load.z
 python -m src.evaluate_baseline
 ```
 
-## Evaluate D3QN, PPO and SEA together
+## Evaluate D3QN, PPO and SEA across Low / Medium / High traffic
 
 ```powershell
 python -m src.evaluate_all
 ```
 
-## Generate the convergence plot
+## Generate the original convergence plot
 
 ```powershell
 python -m src.plot_convergence
 ```
 
-## Generate the final comparison plots
+## Generate the final Low / Medium / High comparison plots
 
 ```powershell
 python -m src.plot_final_results
 ```
 
-Final plot color convention:
+## Recreate per-episode checkpoint models
+
+Train both D3QN and PPO checkpoint experiments:
+
+```powershell
+python -m src.train_epoch_checkpoints --method both
+```
+
+Or run separately:
+
+```powershell
+python -m src.train_epoch_checkpoints --method d3qn
+python -m src.train_epoch_checkpoints --method ppo
+```
+
+## Evaluate checkpoint models
+
+```powershell
+python -m src.evaluate_epoch_checkpoints
+```
+
+## Generate per-episode training/testing plots
+
+```powershell
+python -m src.plot_epoch_results
+```
+
+Plot color convention:
 
 ```text
 D3QN → Blue
@@ -551,7 +702,7 @@ SEA  → Green
 
 # Reproducibility Notes
 
-Use the final trained Medium-traffic models:
+Use the final trained Medium-traffic models for the Low / Medium / High comparison:
 
 ```text
 models/d3qn_medium_load.pth
@@ -559,6 +710,14 @@ models/ppo_medium_load.zip
 ```
 
 Do not use archived Low/High pre-correction models when reproducing the final comparison.
+
+For the per-episode analysis, intermediate checkpoint models are generated locally under:
+
+```text
+models/epoch_checkpoints/
+```
+
+This folder is intentionally excluded from Git tracking because it contains intermediate model files. The CSV outputs and plots required to inspect the experiment are included under `results/epoch_analysis/`.
 
 ---
 
@@ -572,7 +731,10 @@ The project does not claim that D3QN is universally superior to all other DRL me
 - DRL-vs-static allocation differences,
 - D3QN-vs-PPO trade-offs,
 - generalization from Medium training to Low and High traffic,
+- training and testing behavior across checkpoint episodes,
 - QoS behavior under different traffic loads.
+
+The implementation always distributes the fixed total of 100 RBs among the four slices. Therefore, the resource objective is **efficient redistribution of a fixed resource budget**, not reduction of the total number of RBs consumed.
 
 ---
 
@@ -587,4 +749,5 @@ Possible extensions include:
 - continuous action-space DRL
 - adaptive or multi-objective reward design
 - SAC / TD3 / multi-agent reinforcement learning
+- explicit resource-consumption minimization using an action space that permits unallocated RBs
 - real-time or hardware/testbed validation
